@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>一鍵複製</title>
+<meta name="description" content="點一下就能複製文字">
+<style>
+  :root {
+    --bg: #faf7f2;
+    --card: #ffffff;
+    --ink: #1f1d1a;
+    --muted: #7a746b;
+    --line: #e7e1d8;
+    --accent: #d9480f;
+    --accent-ink: #ffffff;
+    --ok: #2b8a3e;
+    --radius: 16px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161513; --card: #211f1c; --ink: #f2eee8; --muted: #a39d93;
+      --line: #34312c; --accent: #ff6b2c; --accent-ink: #1a0e07; --ok: #51cf66;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    background: var(--bg); color: var(--ink);
+    min-height: 100vh; min-height: 100dvh;
+    padding: max(20px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 520px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 8px 0 4px; letter-spacing: .02em; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: .95rem; line-height: 1.5; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 14px;
+  }
+  label { display: block; font-size: .85rem; color: var(--muted); margin: 0 0 6px; }
+  input, textarea {
+    width: 100%; font: inherit; font-size: 16px; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; outline: none;
+  }
+  input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { min-height: 90px; resize: vertical; line-height: 1.5; }
+  .item-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .item-head strong { font-size: .95rem; }
+  .row { margin-bottom: 10px; }
+  button {
+    font: inherit; cursor: pointer; border: 0; border-radius: 12px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn {
+    display: block; width: 100%; padding: 14px 16px; font-size: 1rem; font-weight: 600;
+    background: var(--accent); color: var(--accent-ink);
+    transition: transform .08s ease, opacity .2s;
+  }
+  .btn:active { transform: scale(.98); }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1px dashed var(--line); font-weight: 500; }
+  .btn.done { background: var(--ok); color: #fff; }
+  .link-btn { background: none; color: var(--muted); padding: 4px 6px; font-size: .85rem; }
+  .link-btn:hover { color: var(--accent); }
+  .result { display: none; }
+  .result.show { display: block; }
+  .url {
+    word-break: break-all; font-size: .85rem; color: var(--muted);
+    background: var(--bg); border-radius: 10px; padding: 10px 12px; margin: 0 0 10px;
+    max-height: 120px; overflow: auto;
+  }
+  .stack > * + * { margin-top: 10px; }
+  .hint { font-size: .8rem; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+
+  /* 複製模式 */
+  .copy-item { margin-bottom: 14px; }
+  .copy-item .label { font-size: .9rem; color: var(--muted); margin: 0 0 6px 4px; }
+  .copy-item .preview {
+    white-space: pre-wrap; word-break: break-word; line-height: 1.55;
+    background: var(--card); border: 1px solid var(--line); border-bottom: 0;
+    border-radius: var(--radius) var(--radius) 0 0; padding: 14px 16px; font-size: 1rem;
+    user-select: text; -webkit-user-select: text;
+  }
+  .copy-item .btn { border-radius: 0 0 var(--radius) var(--radius); padding: 16px; font-size: 1.05rem; }
+  .copy-item.no-preview .btn { border-radius: var(--radius); }
+  .footer { text-align: center; margin-top: 24px; font-size: .85rem; }
+  .footer a { color: var(--muted); }
+  .toast {
+    position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom));
+    transform: translateX(-50%) translateY(20px); opacity: 0;
+    background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 999px;
+    font-size: .95rem; transition: all .25s ease; pointer-events: none; z-index: 10;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .error { color: var(--accent); }
+  .switch { display: flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--muted); }
+  .switch input { width: auto; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+  const app = document.getElementById("app");
+  const toastEl = document.getElementById("toast");
+
+  /* ---------- 編碼 / 解碼（資料只存在網址 # 後面，不會傳到伺服器） ---------- */
+  function bytesToB64url(bytes) {
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function b64urlToBytes(str) {
+    str = str.replace(/-/g, "+").replace(/_/g, "/");
+    while (str.length % 4) str += "=";
+    const bin = atob(str);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  async function streamBytes(bytes, stream) {
+    const s = new Blob([bytes]).stream().pipeThrough(stream);
+    return new Uint8Array(await new Response(s).arrayBuffer());
+  }
+  const canZip = typeof CompressionStream !== "undefined" && typeof DecompressionStream !== "undefined";
+
+  async function encode(obj) {
+    const raw = new TextEncoder().encode(JSON.stringify(obj));
+    let best = "b" + bytesToB64url(raw);
+    if (canZip) {
+      try {
+        const z = "z" + bytesToB64url(await streamBytes(raw, new CompressionStream("deflate-raw")));
+        if (z.length < best.length) best = z;
+      } catch (e) { /* 不壓縮也沒關係 */ }
+    }
+    return best;
+  }
+  async function decode(str) {
+    const kind = str[0], body = str.slice(1);
+    let bytes = b64urlToBytes(body);
+    if (kind === "z") bytes = await streamBytes(bytes, new DecompressionStream("deflate-raw"));
+    else if (kind !== "b") throw new Error("bad format");
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
+  /* ---------- 複製（含 IG 內建瀏覽器的備援做法） ---------- */
+  function fallbackCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;";
+    document.body.appendChild(ta);
+    const range = document.createRange();
+    range.selectNodeContents(ta);
+    const sel = window.getSelection();
+    sel.removeAllRanges(); sel.addRange(range);
+    ta.setSelectionRange(0, text.length);
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    sel.removeAllRanges();
+    document.body.removeChild(ta);
+    return ok;
+  }
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* 走備援 */ }
+    }
+    return fallbackCopy(text);
+  }
+
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add("show");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => toastEl.classList.remove("show"), 1800);
+  }
+  function el(tag, attrs, ...children) {
+    const n = document.createElement(tag);
+    if (attrs) for (const k in attrs) {
+      if (k === "class") n.className = attrs[k];
+      else if (k.startsWith("on")) n.addEventListener(k.slice(2), attrs[k]);
+      else if (k === "text") n.textContent = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    }
+    children.forEach(c => c != null && n.append(c));
+    return n;
+  }
+  function flash(btn, okText, origText, ok) {
+    btn.textContent = ok ? okText : "複製失敗，請長按上方文字手動複製";
+    if (ok) btn.classList.add("done");
+    clearTimeout(btn._t);
+    btn._t = setTimeout(() => { btn.textContent = origText; btn.classList.remove("done"); }, 2000);
+  }
+  function baseUrl() { return location.href.split("#")[0]; }
+
+  /* ---------- 複製模式（別人點開連結看到的畫面） ---------- */
+  function renderCopy(data) {
+    document.title = data.t ? data.t + "｜一鍵複製" : "一鍵複製";
+    app.innerHTML = "";
+    app.append(el("h1", { text: data.t || "點一下就能複製" }));
+    if (data.d) app.append(el("p", { class: "sub", text: data.d }));
+    else app.append(el("p", { class: "sub", text: "按下按鈕即可複製，再到任何地方貼上。" }));
+
+    (data.i || []).forEach(([label, text]) => {
+      const btnText = label ? "複製「" + label + "」" : "複製文字";
+      const btn = el("button", { class: "btn", text: btnText });
+      btn.addEventListener("click", async () => {
+        const ok = await copyText(text);
+        flash(btn, "✓ 已複製", btnText, ok);
+        if (ok) toast("已複製到剪貼簿");
+      });
+      const wrap = el("div", { class: "copy-item" + (data.h ? " no-preview" : "") });
+      if (label) wrap.append(el("div", { class: "label", text: label }));
+      if (!data.h) wrap.append(el("div", { class: "preview", text: text }));
+      wrap.append(btn);
+      app.append(wrap);
+    });
+
+    app.append(el("div", { class: "footer" },
+      el("a", { href: baseUrl(), text: "我也要做一個複製連結" })));
+  }
+
+  /* ---------- 分享模式（自己製作連結的畫面） ---------- */
+  function renderShare() {
+    document.title = "一鍵複製｜建立分享連結";
+    app.innerHTML = "";
+    app.append(el("h1", { text: "建立複製連結" }));
+    app.append(el("p", { class: "sub", text: "IG 無法讓人直接複製文字。在這裡輸入內容、產生連結，貼到 IG 簡介或限動連結貼紙，別人點開就有「複製」按鈕。" }));
+
+    const titleIn = el("input", { type: "text", placeholder: "例：匯款資訊、優惠碼、地址", maxlength: "60" });
+    const descIn = el("input", { type: "text", placeholder: "選填，會顯示在標題下方", maxlength: "120" });
+    const hideIn = el("input", { type: "checkbox" });
+    app.append(el("div", { class: "card stack" },
+      el("div", null, el("label", { text: "頁面標題（選填）" }), titleIn),
+      el("div", null, el("label", { text: "說明（選填）" }), descIn),
+      el("label", { class: "switch" }, hideIn, "不顯示文字內容，只顯示按鈕")
+    ));
+
+    const list = el("div");
+    app.append(list);
+    const items = [];
+
+    function addItem(label = "", text = "") {
+      const labelIn = el("input", { type: "text", placeholder: "例：帳號、折扣碼（選填）", maxlength: "40" });
+      const textIn = el("textarea", { placeholder: "要讓別人複製的文字" });
+      labelIn.value = label; textIn.value = text;
+      const head = el("div", { class: "item-head" }, el("strong"));
+      const card = el("div", { class: "card" },
+        head,
+        el("div", { class: "row" }, el("label", { text: "按鈕名稱" }), labelIn),
+        el("div", null, el("label", { text: "要複製的內容" }), textIn)
+      );
+      const entry = { card, labelIn, textIn };
+      const del = el("button", { class: "link-btn", text: "刪除", onclick: () => {
+        if (items.length <= 1) { textIn.value = ""; labelIn.value = ""; return; }
+        items.splice(items.indexOf(entry), 1); card.remove(); renumber();
+      }});
+      head.append(del);
+      items.push(entry); list.append(card); renumber();
+      return entry;
+    }
+    function renumber() {
+      items.forEach((it, i) => it.card.querySelector("strong").textContent = "第 " + (i + 1) + " 段");
+    }
+    addItem();
+
+    app.append(el("div", { class: "stack" },
+      el("button", { class: "btn ghost", text: "＋ 再加一段要複製的文字", onclick: () => addItem().textIn.focus() }),
+      el("button", { class: "btn", text: "產生分享連結", onclick: generate })
+    ));
+
+    const urlBox = el("div", { class: "url" });
+    const copyLinkBtn = el("button", { class: "btn", text: "複製連結" });
+    const openLink = el("a", { target: "_blank", rel: "noopener", text: "預覽別人看到的畫面 →" });
+    const msg = el("p", { class: "hint" });
+    const result = el("div", { class: "card result" },
+      el("label", { text: "你的分享連結" }), urlBox, copyLinkBtn,
+      el("p", { class: "hint" }, openLink), msg
+    );
+    app.append(el("div", { style: "height:14px" }), result);
+
+    let currentUrl = "";
+    copyLinkBtn.addEventListener("click", async () => {
+      const ok = await copyText(currentUrl);
+      flash(copyLinkBtn, "✓ 已複製連結", "複製連結", ok);
+    });
+
+    async function generate() {
+      const data = { i: [] };
+      items.forEach(it => {
+        const t = it.textIn.value;
+        if (t.trim()) data.i.push([it.labelIn.value.trim(), t]);
+      });
+      if (!data.i.length) { toast("請先輸入要複製的文字"); items[0].textIn.focus(); return; }
+      if (titleIn.value.trim()) data.t = titleIn.value.trim();
+      if (descIn.value.trim()) data.d = descIn.value.trim();
+      if (hideIn.checked) data.h = 1;
+
+      currentUrl = baseUrl() + "#" + await encode(data);
+      urlBox.textContent = currentUrl;
+      openLink.href = currentUrl;
+      msg.textContent = currentUrl.length > 2000
+        ? "⚠ 連結有點長（" + currentUrl.length + " 字元），部分 App 可能截斷，建議縮短內容或搭配短網址。"
+        : "內容只存在連結裡，不會上傳到任何伺服器。連結長度：" + currentUrl.length + " 字元。";
+      msg.classList.toggle("error", currentUrl.length > 2000);
+      result.classList.add("show");
+      result.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  /* ---------- 路由 ---------- */
+  async function route() {
+    const hash = location.hash.slice(1);
+    if (!hash) return renderShare();
+    try {
+      const data = await decode(hash);
+      if (!data || !Array.isArray(data.i) || !data.i.length) throw new Error("empty");
+      renderCopy(data);
+    } catch (e) {
+      app.innerHTML = "";
+      app.append(el("h1", { text: "連結無法讀取" }),
+        el("p", { class: "sub", text: "這個連結可能不完整（被截斷了），請向分享者索取完整連結。" }),
+        el("a", { href: baseUrl(), class: "btn", style: "text-align:center;text-decoration:none", text: "建立新的複製連結" }));
+    }
+  }
+  window.addEventListener("hashchange", route);
+  route();
+})();
+</script>
+</body>
+</html>
